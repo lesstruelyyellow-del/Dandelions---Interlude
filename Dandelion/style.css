@@ -1,0 +1,12 @@
+html,
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #1a1a1a;
+    /* Dark background for space feel */
+}
+
+canvas {
+    display: block;
+}
