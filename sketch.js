@@ -1,143 +1,317 @@
-let circles = [];
-let lastSecond = -1;
+
+let hourCircles = [];
+let minuteCircles = [];
+let fibers = [];
+let centerX, centerY;
+let video;
+let handPose;
+let hands = [];
 
 function setup() {
-    createCanvas(windowWidth, windowHeight);
-    colorMode(HSB, 360, 100, 100, 100);
-    noStroke();
+  createCanvas(windowWidth, windowHeight);
+  colorMode(HSB, 360, 100, 100, 100);
+  centerX = width / 2;
+  centerY = height / 2;
+
+  // --- 1. Initialize Hour Circles ---
+  for (let i = 0; i < 12; i++) {
+    // Start randomly in a large area to allow sorting
+    hourCircles.push(new HourCircle(centerX + random(-50, 50), centerY + random(-50, 50), i));
+  }
+
+  // Run Physics Packing Simulation
+  // Enforce strict non-overlap
+  for (let i = 0; i < 5000; i++) {
+    for (let h of hourCircles) {
+      // Attraction to Center (Stronger to pack them tight)
+      let centerForce = createVector(centerX - h.pos.x, centerY - h.pos.y);
+      centerForce.mult(0.01);
+      h.applyForce(centerForce);
+
+      // Separation from others (Very strict)
+      for (let other of hourCircles) {
+        if (h !== other) {
+          let d = h.pos.dist(other.pos);
+          let minDist = h.r + other.r + 5; // +5 padding
+          if (d < minDist && d > 0) {
+            let push = p5.Vector.sub(h.pos, other.pos);
+            push.normalize();
+            push.mult(2.5); // Strong push
+            h.applyForce(push);
+          }
+        }
+      }
+      h.updatePhysics();
+    }
+  }
+
+  // Sort Hour Circles Clockwise
+  hourCircles.forEach(h => {
+    let a = atan2(h.pos.y - centerY, h.pos.x - centerX);
+    let sortedAngle = a + HALF_PI;
+    while (sortedAngle < 0) sortedAngle += TWO_PI;
+    while (sortedAngle >= TWO_PI) sortedAngle -= TWO_PI;
+    h.sortedAngle = sortedAngle;
+  });
+  hourCircles.sort((a, b) => a.sortedAngle - b.sortedAngle);
+
+  // Renumber indices to 0..11 based on sort (0 is top/12:00)
+  for (let i = 0; i < hourCircles.length; i++) {
+    hourCircles[i].index = i;
+    hourCircles[i].homePos = hourCircles[i].pos.copy();
+  }
+
+  // --- 2. Initialize Minute Circles (Ring) ---
+  let ringRadius = min(width, height) * 0.35;
+  for (let i = 0; i < 60; i++) {
+    let angle = map(i, 0, 60, -HALF_PI, TWO_PI - HALF_PI);
+    let mx = centerX + cos(angle) * ringRadius;
+    let my = centerY + sin(angle) * ringRadius;
+    minuteCircles.push(new MinuteCircle(mx, my, i, ringRadius, angle));
+  }
+
+  // --- 3. Create Fibers ---
+  // Multi-strand for feathery volume
+  for (let i = 0; i < 60; i++) {
+    let hIndex = floor(i / 5) % 12;
+    let targetHour = hourCircles[hIndex];
+    let targetMinute = minuteCircles[i];
+
+    // 3 strands per connection
+    for (let k = 0; k < 3; k++) {
+      fibers.push(new Fiber(targetHour, targetMinute, k));
+    }
+  }
+
+  // --- 4. Hand Pose ---
+  video = createCapture(VIDEO);
+  video.size(640, 480);
+  video.hide();
+  handPose = ml5.handPose({ flipped: true }, modelLoaded);
+  handPose.detectStart(video, gotHands);
+}
+
+function modelLoaded() {
+  console.log("HandPose ready");
+}
+
+function gotHands(results) {
+  hands = results;
 }
 
 function draw() {
-    background(230, 20, 15); // Dark blue-ish background
+  background(0, 0, 0, 30); // Dark background with slight trail? No, let's do solid clean.
+  background(0, 0, 5);
 
-    let h = hour();
-    let m = minute();
-    let s = second();
+  let h = hour();
+  let m = minute();
+  let s = second();
+  let normHour = h % 12;
+  if (normHour === 0) normHour = 12;
 
-    // Adjust for 12-hour format if desired, or keep 24. 
-    // Let's use 12-hour format for visual clarity as per plan, 
-    // but maybe 24 is cooler for "space". Let's stick to 12 for now.
-    let displayHour = h % 12;
-    if (displayHour === 0) displayHour = 12;
+  // Interaction Point
+  let repel = null;
+  if (hands.length > 0 && hands[0].keypoints[8]) {
+    let k = hands[0].keypoints[8];
+    repel = createVector(
+      map(k.x, 0, video.width, 0, width),
+      map(k.y, 0, video.height, 0, height)
+    );
+  }
 
-    // Manage Hour Circles
-    let hourCircles = circles.filter(c => c.type === 'hour');
-    if (hourCircles.length < displayHour) {
-        circles.push(new PackCircle(width / 2, height / 2, 'hour'));
-    } else if (hourCircles.length > displayHour) {
-        // Remove excess
-        let diff = hourCircles.length - displayHour;
-        for (let i = 0; i < diff; i++) {
-            // Find an hour circle to remove
-            let idx = circles.findIndex(c => c.type === 'hour');
-            if (idx !== -1) circles.splice(idx, 1);
-        }
-    }
+  // "Dancing" -> Global Wind/Breathing
+  let t = millis() * 0.001;
+  let wind = createVector(sin(t) * 0.5, cos(t * 0.7) * 0.5);
 
-    // Manage Minute Circles
-    let minuteCircles = circles.filter(c => c.type === 'minute');
-    if (minuteCircles.length < m) {
-        circles.push(new PackCircle(width / 2, height / 2, 'minute'));
-    } else if (minuteCircles.length > m) {
-        let diff = minuteCircles.length - m;
-        for (let i = 0; i < diff; i++) {
-            let idx = circles.findIndex(c => c.type === 'minute');
-            if (idx !== -1) circles.splice(idx, 1);
-        }
-    }
+  // 1. Draw Fibers (Bottom Layer)
+  for (let f of fibers) {
+    // Highlight fiber if it belongs to current second
+    let isSecond = f.m.index === s;
+    f.display(repel, isSecond, s, t);
+  }
 
-    // Pulse animation every second
-    if (s !== lastSecond) {
-        circles.forEach(c => c.pulse());
-        lastSecond = s;
-    }
+  // 2. Draw Hour Circles
+  for (let i = 0; i < hourCircles.length; i++) {
+    let isActive = i < normHour;
+    hourCircles[i].update(repel);
+    hourCircles[i].display(isActive);
+  }
 
-    // Physics and Draw
-    for (let c of circles) {
-        let gravity = createVector(width / 2, height / 2);
-        gravity.sub(c.pos);
-        gravity.setMag(0.5); // Attraction to center
-        c.applyForce(gravity);
-
-        c.update();
-        c.checkEdges();
-        c.display();
-    }
-
-    // Collision / Separation
-    for (let i = 0; i < circles.length; i++) {
-        for (let j = i + 1; j < circles.length; j++) {
-            let c1 = circles[i];
-            let c2 = circles[j];
-            let dist = p5.Vector.dist(c1.pos, c2.pos);
-            let minDist = c1.r + c2.r + 2; // +2 padding
-
-            if (dist < minDist) {
-                let force = p5.Vector.sub(c1.pos, c2.pos);
-                force.setMag(1); // Separation strength
-                c1.applyForce(force);
-                c2.applyForce(force.mult(-1));
-            }
-        }
-    }
+  // 3. Draw Minute Circles
+  for (let i = 0; i < minuteCircles.length; i++) {
+    let isActive = i < m;
+    let isSecond = i === s;
+    minuteCircles[i].update(repel);
+    minuteCircles[i].display(isActive, isSecond);
+  }
 }
 
 function windowResized() {
-    resizeCanvas(windowWidth, windowHeight);
+  resizeCanvas(windowWidth, windowHeight);
+  setup();
 }
 
-class PackCircle {
-    constructor(x, y, type) {
-        this.pos = createVector(random(width), random(height)); // Start random to avoid stacking
-        this.vel = createVector(0, 0);
-        this.acc = createVector(0, 0);
-        this.type = type;
+// --- Classes ---
 
-        if (this.type === 'hour') {
-            this.targetR = 40;
-            this.hue = 200; // Blue-ish
-        } else {
-            this.targetR = 15;
-            this.hue = 320; // Pink-ish
-        }
-        this.r = 0; // Start at 0 for pop effect
-        this.maxSpeed = 4;
+class HourCircle {
+  constructor(x, y, id) {
+    this.pos = createVector(x, y);
+    this.vel = createVector(0, 0);
+    this.acc = createVector(0, 0);
+    this.r = 28; // Visible distinct circles
+    this.homePos = null;
+    this.index = id;
+  }
+
+  applyForce(f) { this.acc.add(f); }
+
+  updatePhysics() {
+    this.vel.add(this.acc);
+    this.pos.add(this.vel);
+    this.vel.mult(0.6); // Heavy damping
+    this.acc.mult(0);
+  }
+
+  update(repel) {
+    // Tether
+    if (this.homePos) {
+      let tether = p5.Vector.sub(this.homePos, this.pos);
+      tether.mult(0.1);
+      this.applyForce(tether);
+    }
+    // Repel
+    if (repel) {
+      let d = this.pos.dist(repel);
+      if (d < 180) {
+        let f = p5.Vector.sub(this.pos, repel);
+        f.normalize();
+        f.mult(map(d, 0, 180, 5, 0));
+        this.applyForce(f);
+      }
+    }
+    this.updatePhysics();
+  }
+
+  display(active) {
+    noStroke();
+    if (active) {
+      // "Golden" -> Hue 45
+      // But let's use the gradient scheme active logic? 
+      // The prompt asked for "Golden" specifically for hours originally.
+      // Let's stick to Gold for Hours to distinguish them, or Warm gradient.
+      fill(45, 80, 100);
+      drawingContext.shadowBlur = 25;
+      drawingContext.shadowColor = "gold";
+    } else {
+      // Dark inactive
+      fill(240, 20, 20); // Dark Blueish Grey
+      drawingContext.shadowBlur = 0;
+    }
+    ellipse(this.pos.x, this.pos.y, this.r * 2);
+    drawingContext.shadowBlur = 0;
+  }
+}
+
+class MinuteCircle {
+  constructor(x, y, index, radius, angle) {
+    this.homePos = createVector(x, y);
+    this.pos = this.homePos.copy();
+    this.vel = createVector(0, 0);
+    this.acc = createVector(0, 0);
+    this.r = 8;
+    this.index = index;
+    this.angle = angle;
+  }
+  applyForce(f) { this.acc.add(f); }
+
+  update(repel) {
+    let tether = p5.Vector.sub(this.homePos, this.pos);
+    tether.mult(0.1);
+    this.applyForce(tether);
+
+    if (repel) {
+      let d = this.pos.dist(repel);
+      if (d < 100) {
+        let f = p5.Vector.sub(this.pos, repel);
+        f.normalize();
+        f.mult(map(d, 0, 100, 10, 0));
+        this.applyForce(f);
+      }
+    }
+    this.vel.add(this.acc);
+    this.pos.add(this.vel);
+    this.vel.mult(0.85);
+    this.acc.mult(0);
+  }
+
+  display(active, isSecond) {
+    noStroke();
+    // Rainbow Gradient Color based on index
+    let hueVal = map(this.index, 0, 60, 0, 360);
+
+    if (isSecond) {
+      // BRIGHT WHITE pulse
+      fill(0, 0, 100);
+      drawingContext.shadowBlur = 30;
+      drawingContext.shadowColor = "white";
+      ellipse(this.pos.x, this.pos.y, this.r * 2.5);
+    } else if (active) {
+      // Active Color (Rainbow)
+      fill(hueVal, 80, 100);
+      drawingContext.shadowBlur = 15;
+      // Use hex for shadow color approx or just default
+      drawingContext.shadowColor = color(hueVal, 80, 100);
+      ellipse(this.pos.x, this.pos.y, this.r * 2);
+    } else {
+      // Inactive (Ghostly)
+      fill(hueVal, 40, 30);
+      drawingContext.shadowBlur = 0;
+      ellipse(this.pos.x, this.pos.y, this.r);
+    }
+    drawingContext.shadowBlur = 0;
+  }
+}
+
+class Fiber {
+  constructor(h, m, variant) {
+    this.h = h;
+    this.m = m;
+    this.variant = variant;
+    // Random offset for "feathery" spread
+    this.offset = random(-1, 1);
+  }
+
+  display(repel, isSecond, s, time) {
+    noFill();
+    strokeWeight(0.5); // Very thin for feathery look
+
+    // Dancing Sway
+    // Sine wave based on angle + time
+    let swayAmount = 15;
+    let sway = sin(time * 2 + this.m.angle + this.variant) * swayAmount;
+
+    // Calculate curve points
+    let start = this.h.pos;
+    let end = this.m.pos;
+    let midX = (start.x + end.x) / 2;
+    let midY = (start.y + end.y) / 2;
+
+    // Spread the mid-point control to create volume
+    let anglePerp = this.m.angle + HALF_PI;
+    let spread = (this.variant - 1) * 20; // -20, 0, 20
+
+    let cpX = midX + cos(anglePerp) * (spread + sway);
+    let cpY = midY + sin(anglePerp) * (spread + sway);
+
+    if (isSecond) {
+      stroke(0, 0, 100, 80); // White highlight
+      strokeWeight(1.5);
+    } else {
+      // Gradient Color
+      let hueVal = map(this.m.index, 0, 60, 0, 360);
+      stroke(hueVal, 60, 90, 30); // Low opacity
     }
 
-    applyForce(force) {
-        this.acc.add(force);
-    }
-
-    update() {
-        this.vel.add(this.acc);
-        this.vel.limit(this.maxSpeed);
-        this.pos.add(this.vel);
-        this.acc.mult(0);
-
-        // Grow animation
-        if (this.r < this.targetR) {
-            this.r += 2;
-        }
-        // Return to normal size if pulsed
-        if (this.r > this.targetR) {
-            this.r -= 1;
-        }
-    }
-
-    pulse() {
-        this.r += 5;
-    }
-
-    checkEdges() {
-        // Keep within bounds loosely
-        if (this.pos.x < this.r) this.vel.x *= -1;
-        if (this.pos.x > width - this.r) this.vel.x *= -1;
-        if (this.pos.y < this.r) this.vel.y *= -1;
-        if (this.pos.y > height - this.r) this.vel.y *= -1;
-    }
-
-    display() {
-        fill(this.hue, 80, 90);
-        ellipse(this.pos.x, this.pos.y, this.r * 2);
-    }
+    bezier(start.x, start.y, cpX, cpY, cpX, cpY, end.x, end.y);
+  }
 }
