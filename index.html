@@ -2,15 +2,48 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Circle Packing Clock</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Body Segmentation with Three.js</title>
+
+  <!-- p5.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+
+
+  <!-- Three.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #000;
+    }
+
+    #p5Canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+      opacity: 0.5;
+      /* Optional: make video feed semi-transparent */
+      pointer-events: none;
+      /* Let clicks pass through to Three.js if needed */
+      display: none;
+      /* Hide p5 canvas if we only want 3D */
+    }
+
+    canvas {
+      display: block;
+    }
+  </style>
 </head>
 
 <body>
-    <script src="sketch.js"></script>
+  <div id="p5Canvas"></div>
+  <script src="sketch.js"></script>
 </body>
 
 </html>
