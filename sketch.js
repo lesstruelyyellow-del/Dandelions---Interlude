@@ -10,9 +10,11 @@
 
 
 // Three.js variables
-let scene, camera, renderer;
+let scene, camera, renderer, composer;
 let nucleus;
+let stem;
 let fronds = [];
+let minuteGradientTexture;
 
 // Audio variables
 let mic;
@@ -20,8 +22,11 @@ let isDispersed = false;
 let dispersionStartTime = 0;
 const DISPERSION_DURATION = 5000; // 5 seconds
 const DISPERSION_DISTANCE = 20; // Distance to scatter
-const MIC_THRESHOLD = 0.03; // Audio threshold (approx 30dB)
+const MIC_THRESHOLD = 0.1; // Audio threshold (approx 50dB)
 let currentDispersionFactor = 0; // For smooth transition
+
+// Background variables
+let currentHourMode = null; // 'AM' or 'PM'
 
 function setup() {
     noCanvas();
@@ -42,18 +47,22 @@ function mousePressed() {
 function initThree() {
     // Create scene
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0a0a);
+
+    // Create subtle radial gradient background
+    const gradientTexture = createBackgroundGradient();
+    scene.background = gradientTexture;
 
     // Create camera
     camera = new THREE.PerspectiveCamera(
-        75,
+        45,
         window.innerWidth / window.innerHeight,
         0.1,
         1000
     );
     camera.position.x = 0;
-    camera.position.y = 0;
+    camera.position.y = 35;
     camera.position.z = 30;
+    updateCameraPosition();
     camera.lookAt(0, 0, 0);
 
     // Create renderer
@@ -111,11 +120,11 @@ function initThree() {
 
     // Create Nucleus
     // Create Nucleus
-    const geometry = new THREE.SphereGeometry(2.0, 256, 256);
+    const geometry = new THREE.SphereGeometry(3.0, 256, 256);
     const material = new THREE.MeshPhysicalMaterial({
         color: 0xF8F4EC,
         emissive: 0xEFEDE6,
-        emissiveIntensity: 0.2,
+        emissiveIntensity: 0.05, // Reduced to avoid bloom (was 0.1)
         roughness: 0.7,
         metalness: 0.1,
         transmission: 0.0,
@@ -129,8 +138,58 @@ function initThree() {
     nucleus = new THREE.Mesh(geometry, material);
     scene.add(nucleus);
 
+    // Create Stem (Organic)
+    const stemHeight = 70;
+    const stemRadius = 0.15;
+
+    // Create curve points for organic stem with subtle variations
+    const stemPoints = [];
+    const numPoints = 20;
+    for (let i = 0; i < numPoints; i++) {
+        const t = i / (numPoints - 1);
+        const y = -3.0 - (t * stemHeight); // Start below nucleus, go down
+
+        // Add subtle random curves (sine waves for organic feel)
+        const xOffset = Math.sin(t * Math.PI * 2 + 0.5) * 0.3 + Math.sin(t * Math.PI * 4) * 0.15;
+        const zOffset = Math.cos(t * Math.PI * 2 + 1.2) * 0.3 + Math.cos(t * Math.PI * 3) * 0.15;
+
+        stemPoints.push(new THREE.Vector3(xOffset, y, zOffset));
+    }
+
+    const stemCurve = new THREE.CatmullRomCurve3(stemPoints);
+    const stemGeometry = new THREE.TubeGeometry(stemCurve, 64, stemRadius, 16, false);
+    const stemMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0xF8F4EC,
+        emissive: 0xEFEDE6,
+        emissiveIntensity: 0.05,
+        roughness: 0.6,
+        metalness: 0.1,
+        transparent: false,
+        opacity: 1.0,
+    });
+    stem = new THREE.Mesh(stemGeometry, stemMaterial);
+    scene.add(stem);
+
+    // Create Gradient Texture for Minutes
+    minuteGradientTexture = createGradientTexture();
+
+    // Post-processing
+    const renderScene = new THREE.RenderPass(scene, camera);
+
+    const bloomPass = new THREE.UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        0.3, // Reduced Strength (was 0.6)
+        0.4, // Radius
+        0.9  // Threshold (High to exclude nucleus)
+    );
+
+    composer = new THREE.EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+
     // Handle window resize
     window.addEventListener('resize', onWindowResize, false);
+    window.addEventListener('orientationchange', onWindowResize, false);
 }
 
 // Arrays to store categorized fronds for clock updates
@@ -147,9 +206,9 @@ function initFronds() {
     let frondProps = [];
 
     // Inner (Short) - 12 -> Large circle -> HOURS
-    for (let i = 0; i < 12; i++) frondProps.push({ lengthMin: 4.8, lengthMax: 6.8, tipRadius: 0.6, type: 'hour' });
+    for (let i = 0; i < 12; i++) frondProps.push({ lengthMin: 7.2, lengthMax: 10.2, tipRadius: 0.9, type: 'hour' });
     // Middle (Medium) - 60 -> Medium circle -> MINUTES
-    for (let i = 0; i < 60; i++) frondProps.push({ lengthMin: 7.8, lengthMax: 10.8, tipRadius: 0.3, type: 'minute' });
+    for (let i = 0; i < 60; i++) frondProps.push({ lengthMin: 11.7, lengthMax: 16.2, tipRadius: 0.45, type: 'minute' });
 
     // Shuffle the properties to distribute lengths randomly across the uniform sphere
     frondProps.sort(() => Math.random() - 0.5);
@@ -244,6 +303,10 @@ function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    if (composer) {
+        composer.setSize(window.innerWidth, window.innerHeight);
+    }
+    updateCameraPosition();
 }
 
 function updateClock() {
@@ -252,41 +315,56 @@ function updateClock() {
     const minutes = now.getMinutes();
     const seconds = now.getSeconds();
 
+    // Determine AM/PM
+    const newMode = hours < 12 ? 'AM' : 'PM';
+    currentHourMode = newMode;
+
     // Convert to 12-hour format
     hours = hours % 12;
     hours = hours ? hours : 12; // the hour '0' should be '12'
 
-    // Update Hours - GREEN
+    // Debug log every second (approx)
+    if (seconds % 10 === 0 && Math.random() < 0.1) {
+        console.log(`Time: ${hours}:${minutes} ${newMode}, Active Hours: ${hours}, Active Minutes: ${minutes}`);
+    }
+
+    // Update Hours - Vibrant Green
     hourFronds.forEach((frond, index) => {
         const sphere = frond.userData.tipSphere;
         if (index < hours) {
-            sphere.material.color.setHex(0xFF69B4); // Hot Pink
-            sphere.material.emissive.setHex(0xFF69B4);
-            sphere.material.emissiveIntensity = 0.5; // Reduced from 2.0 to show 3D shading
-            sphere.material.roughness = 0.4; // Ensure roughness allows for highlights
+            // Active: Vibrant Green
+            sphere.material.color.setHex(0x32CD32); // Lime Green (More visible)
+            sphere.material.emissive.setHex(0x228B22); // Forest Green Emissive
+            sphere.material.emissiveIntensity = 1.0;
+            sphere.material.roughness = 0.4;
         } else {
-            sphere.material.color.setHex(0xF8F4EC); // Original color
-            sphere.material.emissive.setHex(0xEFEDE6);
-            sphere.material.emissiveIntensity = 0.1; // Dim
+            // Inactive: White
+            sphere.material.color.setHex(0xFFFFFF);
+            sphere.material.emissive.setHex(0xCCCCCC);
+            sphere.material.emissiveIntensity = 0.2;
         }
     });
 
-    // Update Minutes - PURPLE
+    // Update Minutes - Pink
     minuteFronds.forEach((frond, index) => {
         const sphere = frond.userData.tipSphere;
         if (index < minutes) {
-            sphere.material.color.setHex(0x800080); // Purple
-            sphere.material.emissive.setHex(0x800080);
-            sphere.material.emissiveIntensity = 0.5; // Reduced from 1.5
+            // Active: Pink
+            sphere.material.map = null;
+            sphere.material.emissiveMap = null;
+            sphere.material.color.setHex(0xFF69B4); // Hot Pink
+            sphere.material.emissive.setHex(0xD14796); // Darker Pink Emissive
+            sphere.material.emissiveIntensity = 1.0;
             sphere.material.roughness = 0.4;
         } else {
-            sphere.material.color.setHex(0xF8F4EC);
-            sphere.material.emissive.setHex(0xEFEDE6);
-            sphere.material.emissiveIntensity = 0.1; // Dim
+            // Inactive: White
+            sphere.material.map = null;
+            sphere.material.emissiveMap = null;
+            sphere.material.color.setHex(0xFFFFFF); // Pure White
+            sphere.material.emissive.setHex(0xCCCCCC);
+            sphere.material.emissiveIntensity = 0.2;
         }
     });
-
-
 }
 
 function draw() {
@@ -305,7 +383,11 @@ function draw() {
     // Keep camera straight facing the cubes
     camera.lookAt(0, 0, 0);
 
-    renderer.render(scene, camera);
+    if (composer) {
+        composer.render();
+    } else {
+        renderer.render(scene, camera);
+    }
 }
 
 function animateFronds() {
@@ -341,7 +423,8 @@ function animateFronds() {
     // Smoothly interpolate dispersion factor
     const targetDispersion = isDispersed ? 1.0 : 0.0;
     // Slower return: if target is 0.0, use smaller lerp factor
-    const lerpFactor = isDispersed ? 0.05 : 0.005; // 0.05 for fast out, 0.005 for slow back
+    // 0.008 gives approx 10s return (600 frames)
+    const lerpFactor = isDispersed ? 0.05 : 0.008;
     currentDispersionFactor += (targetDispersion - currentDispersionFactor) * lerpFactor;
 
     // Pass 1: Calculate proposed positions
@@ -493,4 +576,99 @@ function animateFronds() {
         // Reset resolvedTipPos for next frame
         mesh.userData.resolvedTipPos = null;
     });
+}
+
+function createBackgroundGradient() {
+    const size = 2048; // Higher resolution for smooth gradient
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    // Create subtle radial gradient
+    const gradient = ctx.createRadialGradient(
+        size / 2, size / 2, 0,           // Center circle
+        size / 2, size / 2, size / 2     // Outer circle
+    );
+
+    // Radial gradient: Lighter Grey Center -> Darker Grey/Black Edges
+    gradient.addColorStop(0.0, '#2a2a2a'); // Center: Dark Grey (Visible against black)
+    gradient.addColorStop(1.0, '#050505'); // Edge: Almost Black
+
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    return texture;
+}
+
+function createNoiseTexture(colorHex) {
+    const size = 1024; // Increased size for smooth noise
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    // Fill background
+    const color = new THREE.Color(colorHex);
+    ctx.fillStyle = `#${color.getHexString()}`;
+    ctx.fillRect(0, 0, size, size);
+
+    // Add noise
+    const imageData = ctx.getImageData(0, 0, size, size);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const noise = (Math.random() - 0.5) * 20; // Noise intensity
+        data[i] = Math.max(0, Math.min(255, data[i] + noise));
+        data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise));
+        data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise));
+        // Alpha remains 255
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    // Removed NearestFilter to allow Linear filtering (default) for smooth look
+    return texture;
+}
+
+function createGradientTexture() {
+    const size = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    // Create Radial Gradient
+    // Inner circle (x, y, r) to Outer circle (x, y, r)
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+
+    // Colors based on "Aura" / Sunset gradient
+    gradient.addColorStop(0.0, '#FF33AA'); // Center: Pink
+    gradient.addColorStop(0.6, '#FF9966'); // Mid: Peach
+    gradient.addColorStop(1.0, '#FFFF66'); // Edge: Yellow
+
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    return texture;
+}
+
+function updateCameraPosition() {
+    if (!camera) return;
+    const aspect = window.innerWidth / window.innerHeight;
+    const objectRadius = 30; // Increased for better laptop screen fit
+    const fovRad = camera.fov * (Math.PI / 180);
+
+    // Calculate distance needed to fit the object
+    // If aspect < 1 (portrait), we constrain by width, so we divide by aspect
+    const dist = objectRadius / (Math.tan(fovRad / 2) * Math.min(1, aspect));
+
+    camera.position.z = dist;
+}
+
+function touchStarted() {
+    if (getAudioContext().state !== 'running') {
+        userStartAudio();
+    }
 }
