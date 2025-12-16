@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Body Segmentation with Three.js</title>
+  <title>Dandelion Clock Visualization</title>
 
   <!-- p5.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
@@ -14,13 +14,26 @@
 
   <!-- Three.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- Post-processing -->
+  <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 
   <style>
+    html,
     body {
+      width: 100%;
+      height: 100%;
       margin: 0;
       padding: 0;
       overflow: hidden;
-      background-color: #000;
+      /* Disable scrolling */
+      background-color: #1a1a1a;
+      touch-action: none;
+      /* Disable touch scrolling/zooming */
     }
 
     #p5Canvas {
@@ -43,6 +56,9 @@
 </head>
 
 <body>
+  <div id="fpsCounter"
+    style="position: absolute; top: 10px; left: 10px; color: white; font-family: monospace; font-size: 16px; z-index: 100; pointer-events: none;">
+    FPS: 0</div>
   <div id="p5Canvas"></div>
   <script src="sketch.js"></script>
 </body>
